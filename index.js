@@ -66,6 +66,39 @@ setInterval(fetchAndCacheData, 5 * 60 * 1000); // every 5 minutes
 app.get("/leaderboard/top14", (req, res) => {
   res.json(cachedData);
 });
+app.get("/leaderboard/prev", async (req, res) => {
+  try {
+    const now = new Date();
+    const prevMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
+    const prevMonthEnd = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 0));
+
+    const startStr = prevMonth.toISOString().slice(0, 10);
+    const endStr = prevMonthEnd.toISOString().slice(0, 10);
+
+    const url = `https://services.rainbet.com/v1/external/affiliates?start_at=${startStr}&end_at=${endStr}&key=${API_KEY}`;
+    const response = await fetch(url);
+    const json = await response.json();
+
+    if (!json.affiliates) throw new Error("No previous data");
+
+    const sorted = json.affiliates.sort(
+      (a, b) => parseFloat(b.wagered_amount) - parseFloat(a.wagered_amount)
+    );
+
+    const top10 = sorted.slice(0, 10);
+    const processed = top10.map(entry => ({
+      username: maskUsername(entry.username),
+      wagered: Math.round(parseFloat(entry.wagered_amount)),
+      weightedWager: Math.round(parseFloat(entry.wagered_amount)),
+    }));
+
+    res.json(processed);
+  } catch (err) {
+    console.error("[❌] Failed to fetch previous leaderboard:", err.message);
+    res.status(500).json({ error: "Failed to fetch previous leaderboard data." });
+  }
+});
+
 
 setInterval(() => {
   fetch(SELF_URL)
