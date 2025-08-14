@@ -150,22 +150,28 @@ async function fetchXFUNAll({ startMs, endMs, take = 50, maxPages = 200 }) {
 
 function buildLeaderboardXFUN(rows) {
   const totals = new Map();
+
   for (const r of rows) {
     const user = getUsernameXFUN(r);
-    const wager = getWagerXFUN(r);
-    totals.set(user, (totals.get(user) || 0) + wager);
+    const deposited = Number(r?.deposited ?? 0); // use deposited instead of wagered
+    totals.set(user, (totals.get(user) || 0) + deposited);
   }
 
   let list = Array.from(totals.entries()).map(([username, total]) => ({
     username: maskUsername(username),
-    wagered: Math.round(total),
-    weightedWager: Math.round(total),
+    wagered: Number(total.toFixed(2)),        // deposited amount
+    weightedWager: Number(total.toFixed(2)),  // same as deposited
   }));
 
   list.sort((a, b) => b.wagered - a.wagered);
-  if (list.length >= 2) [list[0], list[1]] = [list[1], list[0]];
+
+  if (list.length >= 2) {
+    [list[0], list[1]] = [list[1], list[0]]; // swap top 2
+  }
+
   return list;
 }
+
 
 async function getBiweeklyRawXFUN() {
   const startMs = START_UTC.unix() * 1000;
