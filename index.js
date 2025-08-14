@@ -116,10 +116,10 @@ setInterval(() => {
    X.FUN BIWEEKLY + RAW ENDPOINTS
 =========================================================== */
 
-const XFUN_CODE = process.env.XFUN_CODE || "YOUR_CODE";
-const XFUN_API_KEY = process.env.XFUN_API_KEY || "YOUR_API_KEY";
-const START_UTC = moment.utc("2025-08-13T00:00:00Z");
-const END_UTC   = moment.utc("2025-08-27T00:00:00Z");
+const XFUN_CODE = process.env.XFUN_CODE || "Kcaz";
+const XFUN_API_KEY = process.env.XFUN_API_KEY || "6e34640f23";
+const START_UTC = moment.utc("2025-08-11T00:00:00Z");
+const END_UTC   = moment.utc("2025-08-25T00:00:00Z");
 
 const getUsernameXFUN = (row) =>
   row?.name ?? row?.username ?? row?.userName ?? row?.user?.username ?? row?.user ?? "Unknown";
