@@ -6,12 +6,15 @@ import cors from "cors";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// ====== CONFIG ======
 const SELF_URL = "https://kcazzydata.onrender.com/leaderboard/top14";
 const API_KEY = "9emj7LErCZydUlTRZpHCuiWdn64atsNF";
 
 let cachedData = [];
 
-// ✅ CORS headers manually
+// ====== CORS (open) ======
+app.use(cors());
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
   res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
@@ -19,45 +22,89 @@ app.use((req, res, next) => {
   next();
 });
 
+// ====== Helpers ======
 function maskUsername(username) {
+  if (!username) return "****";
   if (username.length <= 4) return username;
   return username.slice(0, 2) + "***" + username.slice(-2);
 }
 
-function getDynamicApiUrl() {
+/**
+ * Returns the UTC bounds for the custom period:
+ *   start: 5th 00:00:01 UTC
+ *   end:   next month 4th 23:59:59 UTC
+ *
+ * offset = 0 current period
+ *        = -1 previous period
+ *        = +1 next period
+ */
+function periodBounds(offset = 0) {
   const now = new Date();
-  const year = now.getUTCFullYear();
-  const month = now.getUTCMonth(); // 0-indexed
 
-  const start = new Date(Date.UTC(year, month, 1));
-  const end = new Date(Date.UTC(year, month + 1, 0));
+  // Determine which "start month" we’re in
+  // If today UTC date is < 5, the current period actually started last month
+  let anchorYear = now.getUTCFullYear();
+  let anchorMonth = now.getUTCMonth();
+  if (now.getUTCDate() < 5) {
+    const prev = new Date(Date.UTC(anchorYear, anchorMonth - 1, 1));
+    anchorYear = prev.getUTCFullYear();
+    anchorMonth = prev.getUTCMonth();
+  }
 
-  const startStr = start.toISOString().slice(0, 10);
-  const endStr = end.toISOString().slice(0, 10);
+  // Apply offset (each period shifts by 1 month)
+  const totalMonths = anchorYear * 12 + anchorMonth + offset;
+  const startYear = Math.floor(totalMonths / 12);
+  const startMonth = totalMonths % 12;
 
+  // Start: 5th 00:00:01 UTC of startMonth
+  const start = new Date(Date.UTC(startYear, startMonth, 5, 0, 0, 1));
+  // End: next month 4th 23:59:59 UTC
+  const end = new Date(Date.UTC(startYear, startMonth + 1, 4, 23, 59, 59));
+
+  return { start, end };
+}
+
+// YYYY-MM-DD for Rainbet API (date-based window; includes whole days)
+function ymd(d) {
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(d.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+// Build Rainbet API URL for CURRENT period
+function getDynamicApiUrl() {
+  const { start, end } = periodBounds(0);
+  const startStr = ymd(start); // 5th
+  const endStr = ymd(end);     // 4th of next month
   return `https://services.rainbet.com/v1/external/affiliates?start_at=${startStr}&end_at=${endStr}&key=${API_KEY}`;
 }
 
+// ====== Fetch & Cache (Rainbet) ======
 async function fetchAndCacheData() {
   try {
     const response = await fetch(getDynamicApiUrl());
     const json = await response.json();
-    if (!json.affiliates) throw new Error("No data");
+    if (!json?.affiliates) throw new Error("No data");
 
     const sorted = json.affiliates.sort(
-      (a, b) => parseFloat(b.wagered_amount) - parseFloat(a.wagered_amount)
+      (a, b) => parseFloat(b.wagered_amount || 0) - parseFloat(a.wagered_amount || 0)
     );
 
     const top10 = sorted.slice(0, 10);
-    if (top10.length >= 2) [top10[0], top10[1]] = [top10[1], top10[0]];
 
-    cachedData = top10.map(entry => ({
+    // Swap top 2 if you want that visual quirk
+    if (top10.length >= 2) {
+      [top10[0], top10[1]] = [top10[1], top10[0]];
+    }
+
+    cachedData = top10.map((entry) => ({
       username: maskUsername(entry.username),
-      wagered: Math.round(parseFloat(entry.wagered_amount)),
-      weightedWager: Math.round(parseFloat(entry.wagered_amount)),
+      wagered: Math.round(parseFloat(entry.wagered_amount || 0)),
+      weightedWager: Math.round(parseFloat(entry.wagered_amount || 0)),
     }));
 
-    console.log(`[✅] Leaderboard updated`);
+    console.log(`[✅] Leaderboard updated (${new Date().toISOString()})`);
   } catch (err) {
     console.error("[❌] Failed to fetch Rainbet data:", err.message);
   }
@@ -66,36 +113,36 @@ async function fetchAndCacheData() {
 fetchAndCacheData();
 setInterval(fetchAndCacheData, 5 * 60 * 1000); // every 5 minutes
 
+// ====== Routes (Rainbet) ======
 app.get("/leaderboard/top14", (req, res) => {
   res.json(cachedData);
 });
 
+// Previous full period
 app.get("/leaderboard/prev", async (req, res) => {
   try {
-    const now = new Date();
-    const prevMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
-    const prevMonthEnd = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 0));
-
-    const startStr = prevMonth.toISOString().slice(0, 10);
-    const endStr = prevMonthEnd.toISOString().slice(0, 10);
-
+    const { start, end } = periodBounds(-1);
+    const startStr = ymd(start);
+    const endStr = ymd(end);
     const url = `https://services.rainbet.com/v1/external/affiliates?start_at=${startStr}&end_at=${endStr}&key=${API_KEY}`;
+
     const response = await fetch(url);
     const json = await response.json();
-
-    if (!json.affiliates) throw new Error("No previous data");
+    if (!json?.affiliates) throw new Error("No previous data");
 
     const sorted = json.affiliates.sort(
-      (a, b) => parseFloat(b.wagered_amount) - parseFloat(a.wagered_amount)
+      (a, b) => parseFloat(b.wagered_amount || 0) - parseFloat(a.wagered_amount || 0)
     );
 
     const top10 = sorted.slice(0, 10);
-    if (top10.length >= 2) [top10[0], top10[1]] = [top10[1], top10[0]]; // swap
+    if (top10.length >= 2) {
+      [top10[0], top10[1]] = [top10[1], top10[0]];
+    }
 
-    const processed = top10.map(entry => ({
+    const processed = top10.map((entry) => ({
       username: maskUsername(entry.username),
-      wagered: Math.round(parseFloat(entry.wagered_amount)),
-      weightedWager: Math.round(parseFloat(entry.wagered_amount)),
+      wagered: Math.round(parseFloat(entry.wagered_amount || 0)),
+      weightedWager: Math.round(parseFloat(entry.wagered_amount || 0)),
     }));
 
     res.json(processed);
@@ -105,15 +152,27 @@ app.get("/leaderboard/prev", async (req, res) => {
   }
 });
 
+// Optional debug route for period window
+app.get("/period", (req, res) => {
+  const cur = periodBounds(0);
+  const prev = periodBounds(-1);
+  const next = periodBounds(1);
+  res.json({
+    current: { startISO: cur.start.toISOString(), endISO: cur.end.toISOString(), startYMD: ymd(cur.start), endYMD: ymd(cur.end) },
+    previous: { startISO: prev.start.toISOString(), endISO: prev.end.toISOString(), startYMD: ymd(prev.start), endYMD: ymd(prev.end) },
+    next: { startISO: next.start.toISOString(), endISO: next.end.toISOString(), startYMD: ymd(next.start), endYMD: ymd(next.end) },
+  });
+});
+
+// Keep-alive self ping (Render)
 setInterval(() => {
   fetch(SELF_URL)
     .then(() => console.log(`[🔁] Self-pinged ${SELF_URL}`))
-    .catch(err => console.error("[⚠️] Self-ping failed:", err.message));
+    .catch((err) => console.error("[⚠️] Self-ping failed:", err.message));
 }, 270000); // every 4.5 mins
 
-
 /* ===========================================================
-   X.FUN BIWEEKLY + RAW ENDPOINTS
+   X.FUN BIWEEKLY + RAW ENDPOINTS (unchanged)
 =========================================================== */
 
 const XFUN_CODE = process.env.XFUN_CODE || "Kcaz";
@@ -150,10 +209,9 @@ async function fetchXFUNAll({ startMs, endMs, take = 50, maxPages = 200 }) {
 
 function buildLeaderboardXFUN(rows) {
   const totals = new Map();
-
   for (const r of rows) {
     const user = getUsernameXFUN(r);
-    const deposited = Number(r?.deposited ?? 0); // use deposited instead of wagered
+    const deposited = Number(r?.deposited ?? 0); // using deposited instead of wagered
     totals.set(user, (totals.get(user) || 0) + deposited);
   }
 
@@ -171,7 +229,6 @@ function buildLeaderboardXFUN(rows) {
 
   return list;
 }
-
 
 async function getBiweeklyRawXFUN() {
   const startMs = START_UTC.unix() * 1000;
@@ -201,7 +258,6 @@ app.get("/leaderboard/biweekly", async (req, res) => {
     res.status(500).json({ error: "Failed to build leaderboard" });
   }
 });
-
 
 /* ===========================================================
    START SERVER
